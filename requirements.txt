@@ -2,3 +2,5 @@ streamlit
 pydub
 audioop-lts
 google-cloud-texttospeech
+google-genai
+Pillow
