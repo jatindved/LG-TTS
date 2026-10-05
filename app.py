@@ -1,36 +1,84 @@
 import streamlit as st
 import os
+import json
 from pydub import AudioSegment
 from google.cloud import texttospeech
 from google.api_core.client_options import ClientOptions
 
 st.set_page_config(page_title="AI Voice & BGM Studio", page_icon="🎙️", layout="centered")
 
+CONFIG_FILE = "config.json"
+
+# ૧. JSON ફાઈલમાંથી કી વાંચવા માટેનું ફંક્શન
+def load_saved_key():
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                data = json.load(f)
+                return data.get("api_key", "")
+        except Exception:
+            return ""
+    return ""
+
+# ૨. JSON ફાઈલમાં કી સેવ કરવા માટેનું ફંક્શન
+def save_key_to_file(key):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump({"api_key": key}, f)
+
+# પહેલાંથી સેવ થયેલી કી લોડ કરવી
+current_saved_key = load_saved_key()
+
 st.title("🎙️ Google Journey & Neural2 Voice Studio")
 st.write("Generate ultra-realistic Google voices and blend them with background music.")
 
-# 1. API Key Input
-api_key = st.text_input("Enter your Google Cloud API Key:", type="password", placeholder="AIzaSy...")
+# API Key સેટિંગ્સ બોક્સ
+with st.expander("🔑 Google Cloud API Key Settings", expanded=(not bool(current_saved_key))):
+    input_key = st.text_input(
+        "Enter Google Cloud API Key:",
+        value=current_saved_key,
+        type="password",
+        placeholder="AIzaSy...",
+        help="Once saved, this key remains stored in config.json."
+    )
+    
+    col_k1, col_k2 = st.columns([1, 1])
+    with col_k1:
+        if st.button("💾 Save API Key"):
+            if input_key.strip():
+                save_key_to_file(input_key.strip())
+                st.success("API Key successfully saved!")
+                st.rerun()
+            else:
+                st.warning("Please enter a valid key.")
+    with col_k2:
+        if current_saved_key and st.button("🗑️ Clear Saved Key"):
+            if os.path.exists(CONFIG_FILE):
+                os.remove(CONFIG_FILE)
+            st.info("Saved key removed.")
+            st.rerun()
 
-# 2. Script Text Input
+# ફાઈનલ ઉપયોગ માટે કી
+api_key = input_key.strip() if input_key.strip() else current_saved_key
+
+# ૩. સ્ક્રિપ્ટ લખાણ ઇનપુટ
 text_input = st.text_area(
     "Script Text (Hindi):", 
     height=200, 
     placeholder="Paste your story or script here..."
 )
 
-# 3. Voice Selection
+# ૪. અવાજ પસંદગી
 col1, col2 = st.columns(2)
 with col1:
     voice_choice = st.selectbox(
         "Select Narrator Voice:",
         [
+            "hi-IN-Journey-F (Female - Ultra Natural Narrative)",
+            "hi-IN-Journey-D (Male - Ultra Natural Storytelling)",
             "hi-IN-Neural2-B (Male - Deep & Classical)",
             "hi-IN-Neural2-C (Male - Calm & Serious)",
             "hi-IN-Neural2-A (Female - Clear & Narrative)",
-            "hi-IN-Neural2-D (Female - Soft & Emotional)",
-            "hi-IN-Journey-D (Male - Ultra Natural Storytelling)",
-            "hi-IN-Journey-F (Female - Ultra Natural Narrative)"
+            "hi-IN-Neural2-D (Female - Soft & Emotional)"
         ]
     )
     voice_name = voice_choice.split(" ")[0]
@@ -46,7 +94,7 @@ with col2:
         help="0.85 to 0.90 is ideal for devotional and storytelling narration."
     )
 
-# 4. Background Music Upload
+# ૫. BGM અપલોડ
 bgm_file = st.file_uploader("Upload Background Music (MP3/WAV):", type=["mp3", "wav"])
 
 bgm_volume_reduction = st.slider(
@@ -59,15 +107,14 @@ bgm_volume_reduction = st.slider(
 )
 
 if st.button("🎧 Generate Master Audio", type="primary", use_container_width=True):
-    if not api_key.strip():
-        st.error("Please enter your Google Cloud API Key.")
+    if not api_key:
+        st.error("Please enter and save your Google Cloud API Key above.")
     elif not text_input.strip():
         st.warning("Please enter your script text.")
     else:
         with st.spinner("Synthesizing voice via Google Neural Engine and mixing audio..."):
             try:
-                # Setup Google TTS Client with API Key
-                client_options = ClientOptions(api_key=api_key.strip())
+                client_options = ClientOptions(api_key=api_key)
                 client = texttospeech.TextToSpeechClient(client_options=client_options)
 
                 synthesis_input = texttospeech.SynthesisInput(text=text_input)
@@ -99,7 +146,6 @@ if st.button("🎧 Generate Master Audio", type="primary", use_container_width=T
 
                 voice_audio = AudioSegment.from_file(temp_voice)
 
-                # Mix BGM if provided
                 if bgm_file is not None:
                     with open(temp_bgm, "wb") as f:
                         f.write(bgm_file.getbuffer())
