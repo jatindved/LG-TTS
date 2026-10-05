@@ -1,3 +1,6 @@
-streamlit>=1.40.0
+streamlit>=1.40,<2
 google-genai>=2.25.0
 pydub>=0.25.1
+Pillow>=10.0.0
+huggingface-hub>=0.27.0
+streamlit-local-storage==0.0.25
