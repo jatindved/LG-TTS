@@ -1,7 +1,4 @@
-from pathlib import Path
-import textwrap, zipfile, os
 
-app = r'''
 import streamlit as st
 import io
 import json
@@ -854,33 +851,3 @@ if st.button(
                         "Image pending. Resume this package when free image "
                         "quota becomes available."
                     )
-'''
-
-requirements = """streamlit>=1.40
-google-genai>=2.25.0
-pydub>=0.25.1
-Pillow>=10.0.0
-huggingface_hub>=0.27.0
-streamlit-local-storage==0.0.25
-"""
-
-readme = """# Story Media Creator
-
-English Streamlit application for:
-- Complete story text
-- Matching narration audio
-- Matching scene image
-- Dynamic scene count
-- Fixed narrator voice
-- Gemini 3.8 Flash TTS first, Flash-Lite fallback
-- Up to three Gemini API keys
-- Hugging Face image generation fallback
-- Browser/device local storage for API keys
-- Resume ZIP when a free quota is exhausted
-- Optional background music
-
-## Run locally
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
