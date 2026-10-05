@@ -10,7 +10,7 @@ from google.cloud import texttospeech
 from google.api_core.client_options import ClientOptions
 from google import genai
 
-st.set_page_config(page_title="AI Story Studio - Auto Model Production", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="AI Story Studio - Production Suite", page_icon="🎬", layout="wide")
 
 CONFIG_FILE = "config.json"
 
@@ -31,7 +31,7 @@ def save_keys_to_file(gcloud_k, gemini_k):
 saved_gcloud, saved_gemini = load_saved_keys()
 
 st.title("🎬 AI Mythological Story & Cinematic Scene Studio")
-st.write("Dynamic Model Auto-Discovery, Consistent Character DNA, Isolated Scene Audios, and One-Click Copyable Prompts.")
+st.write("Dynamic Model Auto-Discovery, Validated Google Neural Voices, Consistent Character DNA, and One-Click Copyable Prompts.")
 
 # 1. Dual Key Settings
 with st.expander("🔑 API Key Settings (Google Cloud + Gemini AI Studio)", expanded=(not bool(saved_gcloud and saved_gemini))):
@@ -85,7 +85,7 @@ ART_STYLE = "Raja Ravi Varma aesthetic blended with cinematic 8k, soft golden am
 text_input = st.text_area(
     "Paste Raw Continuous Story:", 
     height=220, 
-    placeholder="Paste your continuous story text here. The system dynamically queries active models to segment into Scene_01, Scene_02..."
+    placeholder="Paste your story here. The AI will intelligently divide it into scenes with unique IDs (Scene_01, Scene_02...) and matching image references (img_Scene_01)..."
 )
 
 col1, col2, col3 = st.columns(3)
@@ -94,13 +94,14 @@ with col1:
         "Narrator Voice:",
         [
             "hi-IN-Journey-D (Male - Ultra Natural Storytelling)",
-            "hi-IN-Journey-F (Female - Ultra Natural Narrative)",
+            "hi-IN-Neural2-A (Female - Clear & Divine Narrative)",
+            "hi-IN-Neural2-D (Female - Soft & Emotional)",
             "hi-IN-Neural2-B (Male - Deep & Classical)",
-            "hi-IN-Neural2-A (Female - Clear & Narrative)"
+            "hi-IN-Neural2-C (Male - Calm & Serious)"
         ]
     )
     voice_name = voice_choice.split(" ")[0]
-    ssml_gender = texttospeech.SsmlVoiceGender.MALE if ("-B" in voice_name or "Journey-D" in voice_name) else texttospeech.SsmlVoiceGender.FEMALE
+    ssml_gender = texttospeech.SsmlVoiceGender.MALE if ("-B" in voice_name or "-C" in voice_name or "Journey-D" in voice_name) else texttospeech.SsmlVoiceGender.FEMALE
 
 with col2:
     speed_rate = st.slider("Narration Speed:", min_value=0.75, max_value=1.10, value=0.88, step=0.02)
@@ -127,7 +128,6 @@ bgm_volume_reduction = st.slider(
     format="%d dB"
 )
 
-# લોકલ ફોલબેક જો API ન ચાલે તો
 def python_fallback_segment(raw_text):
     sentences = [s.strip() for s in re.split(r'[।\.\n]+', raw_text) if s.strip()]
     scenes = []
@@ -154,7 +154,6 @@ def python_fallback_segment(raw_text):
         })
     return scenes
 
-# ડાયનેમિક મોડેલ ડિટેક્શન (કોઈ હાર્ડકોડ મોડેલ નામ વગર)
 def gemini_segment_dynamic(gemini_api_key, raw_story):
     ai_client = genai.Client(api_key=gemini_api_key)
     prompt = f"""
@@ -178,7 +177,6 @@ def gemini_segment_dynamic(gemini_api_key, raw_story):
                 clean_name = m.name.replace("models/", "")
                 available_models.append(clean_name)
         
-        # ફ્લેશ મોડેલ્સને પ્રાથમિકતા
         sorted_models = sorted(available_models, key=lambda x: (not ("flash" in x.lower()), x))
 
         for model_name in sorted_models:
