@@ -30,7 +30,7 @@ def save_keys_to_file(gcloud_k, gemini_k):
 saved_gcloud, saved_gemini = load_saved_keys()
 
 st.title("🎬 AI Mythological Story & Cinematic Scene Studio")
-st.write("Powered by Google AI Studio (Gemini 2.5) for story intelligence and Google Cloud for natural voice narration.")
+st.write("Powered by Google AI Studio (Gemini 3.8 Flash) for story intelligence and Google Cloud for natural voice narration.")
 
 # 1. Dual Key Management Box
 with st.expander("🔑 API Key Settings (Google Cloud + Gemini AI Studio)", expanded=(not bool(saved_gcloud and saved_gemini))):
@@ -126,7 +126,7 @@ bgm_volume_reduction = st.slider(
     format="%d dB"
 )
 
-# Gemini AI દ્વારા સ્માર્ટ સીન વિશ્લેષણ
+# Gemini AI દ્વારા સ્માર્ટ સીન વિશ્લેષણ (Gemini 3.8 Flash)
 def gemini_segment_story(gemini_api_key, raw_story):
     ai_client = genai.Client(api_key=gemini_api_key)
     prompt = f"""
@@ -143,7 +143,7 @@ def gemini_segment_story(gemini_api_key, raw_story):
     {raw_story}
     """
     response = ai_client.models.generate_content(
-        model='gemini-2.5-flash',
+        model='gemini-3.8-flash',
         contents=prompt,
         config=dict(response_mime_type="application/json")
     )
@@ -175,14 +175,12 @@ if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="prim
     else:
         try:
             status_text = st.empty()
-            status_text.text("🧠 Gemini 2.5 Flash is analyzing the story and orchestrating scenes...")
+            status_text.text("🧠 Gemini 3.8 Flash is analyzing the story and orchestrating scenes...")
 
-            # ૧. Gemini દ્વારા ઓટોમેટિક સીન સ્પ્લિટિંગ
             parsed_scenes = gemini_segment_story(final_gemini_key, text_input)
             total_scenes = len(parsed_scenes)
             st.info(f"Gemini successfully crafted {total_scenes} cinematic scenes!")
 
-            # ૨. Cloud TTS સેટઅપ
             tts_client = texttospeech.TextToSpeechClient(client_options=ClientOptions(api_key=final_gcloud_key))
             voice = texttospeech.VoiceSelectionParams(language_code="hi-IN", name=voice_name, ssml_gender=ssml_gender)
             audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3, speaking_rate=speed_rate, pitch=-1.0)
@@ -198,13 +196,11 @@ if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="prim
 
                 status_text.text(f"Synthesizing Audio & Prompts for Scene {s_num} of {total_scenes}...")
 
-                # ઓડિયો જનરેશન
                 s_input = texttospeech.SynthesisInput(text=narration)
                 res = tts_client.synthesize_speech(input=s_input, voice=voice, audio_config=audio_config)
                 scene_audio = AudioSegment.from_file(io.BytesIO(res.audio_content), format="mp3")
                 full_voice_track += scene_audio + AudioSegment.silent(duration=1000)
 
-                # કેરેક્ટર DNA સાથે પ્રોમ્પ્ટ
                 full_prompt = build_consistent_prompt(visual_desc, selected_ratio)
 
                 scene_results.append((s_num, narration, scene_audio, full_prompt))
@@ -212,7 +208,6 @@ if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="prim
 
             status_text.text("Blending background score and mastering audio...")
 
-            # ૩. BGM મિક્સિંગ
             master_final = full_voice_track
             if bgm_file is not None:
                 bgm_audio = AudioSegment.from_file(io.BytesIO(bgm_file.getvalue()))
@@ -225,7 +220,6 @@ if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="prim
             status_text.empty()
             st.success(f"🎉 Production Completed! Successfully generated {total_scenes} scenes.")
 
-            # Full Story Audio
             st.subheader("🎵 1. Complete Master Narration (With BGM)")
             master_buf = io.BytesIO()
             master_final.export(master_buf, format="mp3", bitrate="192k")
@@ -238,7 +232,6 @@ if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="prim
                 use_container_width=True
             )
 
-            # Individual Scene Breakdowns
             st.divider()
             st.subheader(f"🎬 2. Scene-by-Scene Breakdown ({selected_ratio})")
 
