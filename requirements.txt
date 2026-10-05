@@ -1,4 +1,4 @@
 streamlit
-edge-tts
 pydub
 audioop-lts
+google-cloud-texttospeech
