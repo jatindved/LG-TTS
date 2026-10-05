@@ -9,56 +9,67 @@ from google.cloud import texttospeech
 from google.api_core.client_options import ClientOptions
 from google import genai
 
-st.set_page_config(page_title="AI Story Studio - Auto Scene Production", page_icon="🎬", layout="wide")
+st.set_page_config(page_title="AI Story Studio - Dual Engine Production", page_icon="🎬", layout="wide")
 
 CONFIG_FILE = "config.json"
 
-def load_saved_key():
+def load_saved_keys():
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, "r") as f:
-                return json.load(f).get("api_key", "")
+                data = json.load(f)
+                return data.get("gcloud_key", ""), data.get("gemini_key", "")
         except Exception:
-            return ""
-    return ""
+            return "", ""
+    return "", ""
 
-def save_key_to_file(key):
+def save_keys_to_file(gcloud_k, gemini_k):
     with open(CONFIG_FILE, "w") as f:
-        json.dump({"api_key": key}, f)
+        json.dump({"gcloud_key": gcloud_k, "gemini_key": gemini_k}, f)
 
-current_saved_key = load_saved_key()
+saved_gcloud, saved_gemini = load_saved_keys()
 
 st.title("🎬 AI Mythological Story & Cinematic Scene Studio")
-st.write("Automatically segment raw stories into scenes, generate consistent visual frames, neural narration, and blended background music.")
+st.write("Powered by Google AI Studio (Gemini 2.5) for story intelligence and Google Cloud for natural voice narration.")
 
-# 1. API Key Management
-with st.expander("🔑 Google Cloud / Gemini API Key Settings", expanded=(not bool(current_saved_key))):
-    input_key = st.text_input(
-        "Enter Google Cloud API Key:",
-        value=current_saved_key,
-        type="password",
-        placeholder="AIzaSy...",
-        help="This single key powers Gemini Analysis, Text-to-Speech, and Imagen Visuals."
-    )
-    col_k1, col_k2 = st.columns([1, 1])
-    with col_k1:
-        if st.button("💾 Save Key Permanently"):
-            if input_key.strip():
-                save_key_to_file(input_key.strip())
-                st.success("API Key successfully saved!")
+# 1. Dual Key Management Box
+with st.expander("🔑 API Key Settings (Google Cloud + Gemini AI Studio)", expanded=(not bool(saved_gcloud and saved_gemini))):
+    col_k_in1, col_k_in2 = st.columns(2)
+    with col_k_in1:
+        gcloud_input = st.text_input(
+            "1. Google Cloud API Key (For TTS Audio):",
+            value=saved_gcloud,
+            type="password",
+            placeholder="AIzaSy... (Cloud TTS Key)"
+        )
+    with col_k_in2:
+        gemini_input = st.text_input(
+            "2. Google AI Studio API Key (For Gemini AI):",
+            value=saved_gemini,
+            type="password",
+            placeholder="AIzaSy... (AI Studio Key)"
+        )
+
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        if st.button("💾 Save Both Keys Permanently"):
+            if gcloud_input.strip() and gemini_input.strip():
+                save_keys_to_file(gcloud_input.strip(), gemini_input.strip())
+                st.success("Both API keys saved successfully in config.json!")
                 st.rerun()
             else:
-                st.warning("Please enter a valid API key.")
-    with col_k2:
-        if current_saved_key and st.button("🗑️ Clear Saved Key"):
+                st.warning("Please enter both API keys to proceed.")
+    with col_btn2:
+        if (saved_gcloud or saved_gemini) and st.button("🗑️ Clear Saved Keys"):
             if os.path.exists(CONFIG_FILE):
                 os.remove(CONFIG_FILE)
-            st.info("API Key removed.")
+            st.info("Keys removed.")
             st.rerun()
 
-api_key = input_key.strip() if input_key.strip() else current_saved_key
+final_gcloud_key = gcloud_input.strip() if gcloud_input.strip() else saved_gcloud
+final_gemini_key = gemini_input.strip() if gemini_input.strip() else saved_gemini
 
-# 2. Character DNA & Art Style Definition
+# 2. Master Character DNA
 CHARACTER_DNA = {
     "RAMA": "Lord Rama depicted as a noble 25-year-old ancient Indian prince, serene gentle almond-shaped eyes, divine benevolent smile, dusky wheatish complexion, royal golden-yellow silk pitambara dhoti, traditional ornate Vedic gold mukut crown, gold armlets and necklaces, majestic calm posture.",
     "KAUSHALYA": "Queen Mata Kaushalya, graceful loving queen mother in her mid-40s, kind motherly face with gentle benevolent eyes, dressed in royal crimson-maroon silk saree with wide gold zari border, ornate Vedic gold jewelry, dignified royal demeanor.",
@@ -71,12 +82,12 @@ ART_STYLE = "Raja Ravi Varma aesthetic blended with cinematic 8k, soft golden am
 
 # 3. Raw Script Input
 text_input = st.text_area(
-    "Paste Raw Story (No formatting or scene tags needed):", 
+    "Paste Raw Continuous Story (Gemini will automatically understand and direct the scenes):", 
     height=230, 
-    placeholder="Paste your continuous story text here. The AI will automatically read, understand, and segment it into coherent cinematic scenes..."
+    placeholder="Paste your raw story here. Gemini will analyze the narrative emotion, split into coherent cinematic scenes, identify characters, and prepare visual camera prompts..."
 )
 
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3 = st.columns(3)
 with col1:
     voice_choice = st.selectbox(
         "Narrator Voice:",
@@ -95,7 +106,7 @@ with col2:
 
 with col3:
     aspect_ratio_choice = st.selectbox(
-        "Aspect Ratio:",
+        "Target Aspect Ratio:",
         [
             "9:16 (Instagram Reels / Shorts)",
             "16:9 (YouTube Landscape)",
@@ -105,10 +116,7 @@ with col3:
     )
     selected_ratio = aspect_ratio_choice.split(" ")[0]
 
-with col4:
-    generate_images = st.checkbox("Generate Visuals with Imagen?", value=True)
-
-bgm_file = st.file_uploader("Upload Background Music (MP3/WAV):", type=["mp3", "wav"])
+bgm_file = st.file_uploader("Upload Background Score (MP3/WAV):", type=["mp3", "wav"])
 
 bgm_volume_reduction = st.slider(
     "BGM Volume Reduction (dB):", 
@@ -118,20 +126,23 @@ bgm_volume_reduction = st.slider(
     format="%d dB"
 )
 
-# AI દ્વારા આપોઆપ વાર્તાનું વિશ્લેષણ અને સીન વિભાજન
-def ai_segment_story(client, raw_story):
+# Gemini AI દ્વારા સ્માર્ટ સીન વિશ્લેષણ
+def gemini_segment_story(gemini_api_key, raw_story):
+    ai_client = genai.Client(api_key=gemini_api_key)
     prompt = f"""
-    You are a professional mythological film director. Analyze the following story and break it down into sequential visual scenes.
-    Return ONLY a valid JSON array of objects. Do not wrap in markdown quotes if possible, or use standard json formatting.
-    Each object must have:
+    You are an expert mythological film director and cinematographer. 
+    Analyze this raw story and segment it into coherent cinematic scenes.
+    Ensure each scene represents a meaningful emotional beat or visual transition.
+    Return ONLY a valid JSON list of objects.
+    Each object must contain:
     - "scene_number": integer
-    - "narration_text": the exact segment of text for voiceover in this scene (keep the original language)
-    - "visual_description": a rich English prompt describing the visual action, environment, and characters present.
+    - "narration_text": the exact segment of text for voiceover in this scene (keep the original script language and flow intact)
+    - "visual_description": a rich English prompt describing the visual action, camera angle, mood, and environment.
 
     Story:
     {raw_story}
     """
-    response = client.models.generate_content(
+    response = ai_client.models.generate_content(
         model='gemini-2.5-flash',
         contents=prompt,
         config=dict(response_mime_type="application/json")
@@ -154,27 +165,27 @@ def build_consistent_prompt(visual_desc, ratio):
         matched_dna.append(CHARACTER_DNA["LAKSHMANA"])
         
     dna_block = " | ".join(matched_dna) if matched_dna else "Noble Indian mythological royal figures in classical Vedic attire."
-    return f"Scene Visual: {visual_desc}. Featured Characters: {dna_block}. Art Style: {ART_STYLE}, framed perfectly for {ratio} format."
+    return f"Cinematic scene: {visual_desc}. Featured Characters: {dna_block}. Art Style: {ART_STYLE}, framed perfectly for {ratio} aspect ratio."
 
-if st.button("🚀 Auto-Produce Story & Scenes", type="primary", use_container_width=True):
-    if not api_key:
-        st.error("Please enter and save your Google API Key above.")
+if st.button("🚀 Auto-Produce Story & Scenes (Gemini + Cloud TTS)", type="primary", use_container_width=True):
+    if not final_gcloud_key or not final_gemini_key:
+        st.error("Please enter and save BOTH Google Cloud and Gemini API Keys above.")
     elif not text_input.strip():
         st.warning("Please paste your story text.")
     else:
         try:
-            ai_client = genai.Client(api_key=api_key)
-            tts_client = texttospeech.TextToSpeechClient(client_options=ClientOptions(api_key=api_key))
+            status_text = st.empty()
+            status_text.text("🧠 Gemini 2.5 Flash is analyzing the story and orchestrating scenes...")
+
+            # ૧. Gemini દ્વારા ઓટોમેટિક સીન સ્પ્લિટિંગ
+            parsed_scenes = gemini_segment_story(final_gemini_key, text_input)
+            total_scenes = len(parsed_scenes)
+            st.info(f"Gemini successfully crafted {total_scenes} cinematic scenes!")
+
+            # ૨. Cloud TTS સેટઅપ
+            tts_client = texttospeech.TextToSpeechClient(client_options=ClientOptions(api_key=final_gcloud_key))
             voice = texttospeech.VoiceSelectionParams(language_code="hi-IN", name=voice_name, ssml_gender=ssml_gender)
             audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3, speaking_rate=speed_rate, pitch=-1.0)
-
-            status_text = st.empty()
-            status_text.text("AI is analyzing the narrative and automatically dividing it into scenes...")
-
-            # ૧. વાર્તા આપોઆપ સીનમાં વહેંચાઈ જશે
-            parsed_scenes = ai_segment_story(ai_client, text_input)
-            total_scenes = len(parsed_scenes)
-            st.info(f"AI identified and generated {total_scenes} cinematic scenes.")
 
             scene_results = []
             full_voice_track = AudioSegment.empty()
@@ -185,37 +196,23 @@ if st.button("🚀 Auto-Produce Story & Scenes", type="primary", use_container_w
                 narration = item.get("narration_text", "")
                 visual_desc = item.get("visual_description", "")
 
-                status_text.text(f"Synthesizing Audio & Visuals for Scene {s_num} of {total_scenes}...")
+                status_text.text(f"Synthesizing Audio & Prompts for Scene {s_num} of {total_scenes}...")
 
-                # ૨. ઓડિયો નિર્માણ
+                # ઓડિયો જનરેશન
                 s_input = texttospeech.SynthesisInput(text=narration)
                 res = tts_client.synthesize_speech(input=s_input, voice=voice, audio_config=audio_config)
                 scene_audio = AudioSegment.from_file(io.BytesIO(res.audio_content), format="mp3")
                 full_voice_track += scene_audio + AudioSegment.silent(duration=1000)
 
-                # ૩. ઈમેજ નિર્માણ (કેરેક્ટર DNA સાથે)
-                scene_img = None
-                if generate_images:
-                    prompt = build_consistent_prompt(visual_desc, selected_ratio)
-                    try:
-                        img_response = ai_client.models.generate_images(
-                            model='imagen-3.0-generate-002',
-                            prompt=prompt,
-                            config=dict(number_of_images=1, aspect_ratio=selected_ratio)
-                        )
-                        for generated_image in img_response.generated_images:
-                            scene_img = Image.open(io.BytesIO(generated_image.image.image_bytes))
-                    except Exception:
-                        pass
-                    
-                    time.sleep(2)
+                # કેરેક્ટર DNA સાથે પ્રોમ્પ્ટ
+                full_prompt = build_consistent_prompt(visual_desc, selected_ratio)
 
-                scene_results.append((s_num, narration, scene_audio, scene_img))
+                scene_results.append((s_num, narration, scene_audio, full_prompt))
                 progress_bar.progress((idx + 1) / total_scenes)
 
             status_text.text("Blending background score and mastering audio...")
 
-            # ૪. માસ્ટર મ્યુઝિક ઓવરલે
+            # ૩. BGM મિક્સિંગ
             master_final = full_voice_track
             if bgm_file is not None:
                 bgm_audio = AudioSegment.from_file(io.BytesIO(bgm_file.getvalue()))
@@ -243,40 +240,29 @@ if st.button("🚀 Auto-Produce Story & Scenes", type="primary", use_container_w
 
             # Individual Scene Breakdowns
             st.divider()
-            st.subheader(f"🎬 2. Scene-by-Scene Visuals ({selected_ratio}) & Isolated Audio")
+            st.subheader(f"🎬 2. Scene-by-Scene Breakdown ({selected_ratio})")
 
-            for s_num, s_txt, s_aud, s_img in scene_results:
-                st.markdown(f"#### 📍 Scene {s_num}")
-                col_img, col_aud = st.columns([1, 1])
-                
-                with col_img:
-                    if s_img:
-                        st.image(s_img, caption=f"Scene {s_num} Visual ({selected_ratio})", use_container_width=True)
-                        img_buf = io.BytesIO()
-                        s_img.save(img_buf, format="PNG")
+            for s_num, s_txt, s_aud, s_prompt in scene_results:
+                with st.expander(f"📍 Scene {s_num}: {s_txt[:60]}...", expanded=True):
+                    col_aud, col_prm = st.columns([1, 1])
+                    
+                    with col_aud:
+                        st.markdown("**Narration Audio:**")
+                        st.write(s_txt)
+                        s_buf = io.BytesIO()
+                        s_aud.export(s_buf, format="mp3")
+                        st.audio(s_buf.getvalue(), format="audio/mp3")
                         st.download_button(
-                            label=f"⬇️ Download Scene {s_num} Image",
-                            data=img_buf.getvalue(),
-                            file_name=f"scene_{s_num}_{selected_ratio.replace(':', '_')}.png",
-                            mime="image/png",
-                            key=f"img_btn_{s_num}"
+                            label=f"⬇️ Download Scene {s_num} Audio",
+                            data=s_buf.getvalue(),
+                            file_name=f"scene_{s_num}_audio.mp3",
+                            mime="audio/mp3",
+                            key=f"aud_btn_{s_num}"
                         )
-                    else:
-                        st.info("Visual generation skipped or unavailable.")
                         
-                with col_aud:
-                    st.write(f"**Narration Script:** {s_txt}")
-                    s_buf = io.BytesIO()
-                    s_aud.export(s_buf, format="mp3")
-                    st.audio(s_buf.getvalue(), format="audio/mp3")
-                    st.download_button(
-                        label=f"⬇️ Download Scene {s_num} Audio",
-                        data=s_buf.getvalue(),
-                        file_name=f"scene_{s_num}_audio.mp3",
-                        mime="audio/mp3",
-                        key=f"aud_btn_{s_num}"
-                    )
-                st.divider()
+                    with col_prm:
+                        st.markdown(f"**Visual Prompt ({selected_ratio}):**")
+                        st.code(s_prompt, language="text")
 
         except Exception as e:
             st.error(f"Error during production: {e}")
