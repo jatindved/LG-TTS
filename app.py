@@ -9,6 +9,9 @@ import wave
 import tempfile
 import subprocess
 import os
+import base64
+import zlib
+from pathlib import Path
 from datetime import datetime, timezone
 
 import streamlit as st
@@ -40,7 +43,7 @@ st.set_page_config(
 PRIMARY_TTS_MODEL = "gemini-3.8-flash-tts"
 FALLBACK_TTS_MODEL = "gemini-3.8-flash-lite-tts"
 PRIMARY_IMAGE_MODEL = "gemini-3.1-flash-image"
-FALLBACK_IMAGE_MODEL = "gemini-3-pro-image"
+FALLBACK_IMAGE_MODEL = "gemini-3.1-flash-image"  # same model across API-key rotation
 
 DEFAULT_VOICE_STYLE = (
     "A mature Indian female narrator speaking natural Hindi to a child with "
@@ -67,7 +70,8 @@ if LocalStorage is not None:
         LOCAL_STORAGE_IMPORT_ERROR = repr(exc)
         storage = None
 
-DEVICE_KEYS = {"g1": "smc_gemini_1", "g2": "smc_gemini_2", "g3": "smc_gemini_3"}
+DEVICE_KEYS_BLOB = "smc_gemini_keys_v1"
+DEVICE_BANK_BLOB = "smc_character_bank_v1"
 
 # ---------------------------
 # STATE INIT
@@ -108,10 +112,184 @@ def delete_device_value(storage_key):
     except Exception:
         return False
 
-for short, storage_key in DEVICE_KEYS.items():
-    state_name = f"loaded_{short}"
-    if state_name not in st.session_state:
-        st.session_state[state_name] = read_device_value(storage_key, f"load_{short}")
+
+def save_gemini_keys_blob(g1, g2, g3):
+    if storage is None:
+        return False, "Device storage component is unavailable."
+    payload = json.dumps(
+        {"g1": g1.strip(), "g2": g2.strip(), "g3": g3.strip()},
+        ensure_ascii=False,
+    )
+    try:
+        # One component call avoids duplicate/async component collisions.
+        storage.setItem(
+            DEVICE_KEYS_BLOB,
+            payload,
+            key="save_gemini_keys_blob",
+        )
+        st.session_state["loaded_g1"] = g1.strip()
+        st.session_state["loaded_g2"] = g2.strip()
+        st.session_state["loaded_g3"] = g3.strip()
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def clear_gemini_keys_blob():
+    if storage is None:
+        return False, "Device storage component is unavailable."
+    try:
+        storage.deleteItem(
+            DEVICE_KEYS_BLOB,
+            key="clear_gemini_keys_blob",
+        )
+        st.session_state["loaded_g1"] = ""
+        st.session_state["loaded_g2"] = ""
+        st.session_state["loaded_g3"] = ""
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+def load_saved_gemini_keys_blob():
+    if storage is None:
+        return {"g1": "", "g2": "", "g3": ""}
+    try:
+        raw = storage.getItem(
+            DEVICE_KEYS_BLOB,
+            key="load_gemini_keys_blob",
+        )
+        if not raw:
+            return {"g1": "", "g2": "", "g3": ""}
+        if isinstance(raw, dict):
+            data = raw
+        else:
+            data = json.loads(raw)
+        return {
+            "g1": str(data.get("g1", "") or ""),
+            "g2": str(data.get("g2", "") or ""),
+            "g3": str(data.get("g3", "") or ""),
+        }
+    except Exception:
+        return {"g1": "", "g2": "", "g3": ""}
+
+
+if "gemini_keys_loaded_from_device" not in st.session_state:
+    loaded_blob = load_saved_gemini_keys_blob()
+    st.session_state["loaded_g1"] = loaded_blob["g1"]
+    st.session_state["loaded_g2"] = loaded_blob["g2"]
+    st.session_state["loaded_g3"] = loaded_blob["g3"]
+    st.session_state["gemini_keys_loaded_from_device"] = True
+
+
+def serialize_character_bank_for_device(bank):
+    payload = []
+    for char in bank:
+        item = {
+            "id": char.get("id", ""),
+            "project_group": char.get("project_group", "Custom"),
+            "name": char.get("name", ""),
+            "aliases": list(char.get("aliases", [])),
+            "notes": char.get("notes", ""),
+            "references": [],
+        }
+        for ref in char.get("references", []):
+            item["references"].append({
+                "name": ref.get("name", "reference.jpg"),
+                "mime": ref.get("mime", "image/jpeg"),
+                "data": base64.b64encode(ref.get("bytes", b"")).decode("ascii"),
+            })
+        payload.append(item)
+
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    compressed = zlib.compress(raw, level=6)
+    return base64.b64encode(compressed).decode("ascii")
+
+
+def deserialize_character_bank_from_device(blob):
+    if not blob:
+        return []
+    if isinstance(blob, dict):
+        # Defensive fallback; current format is a compressed base64 string.
+        return []
+    compressed = base64.b64decode(blob)
+    raw = zlib.decompress(compressed)
+    payload = json.loads(raw.decode("utf-8"))
+    bank = []
+    for item in payload:
+        refs = []
+        for ref in item.get("references", []):
+            try:
+                ref_bytes = base64.b64decode(ref.get("data", ""))
+            except Exception:
+                ref_bytes = b""
+            if ref_bytes:
+                refs.append({
+                    "name": ref.get("name", "reference.jpg"),
+                    "mime": ref.get("mime", "image/jpeg"),
+                    "bytes": ref_bytes,
+                })
+        bank.append({
+            "id": item.get("id", ""),
+            "project_group": item.get("project_group", "Custom"),
+            "name": item.get("name", ""),
+            "aliases": item.get("aliases", []),
+            "notes": item.get("notes", ""),
+            "references": refs,
+        })
+    return bank
+
+
+def load_character_bank_from_device():
+    if storage is None:
+        return []
+    try:
+        raw = storage.getItem(
+            DEVICE_BANK_BLOB,
+            key="load_character_bank_blob",
+        )
+        return deserialize_character_bank_from_device(raw)
+    except Exception:
+        return []
+
+
+def save_character_bank_to_device():
+    if storage is None:
+        return False, "Device storage component is unavailable."
+    try:
+        payload = serialize_character_bank_for_device(
+            st.session_state.character_bank
+        )
+        storage.setItem(
+            DEVICE_BANK_BLOB,
+            payload,
+            key="save_character_bank_blob",
+        )
+        st.session_state["character_bank_device_bytes"] = len(
+            payload.encode("utf-8")
+        )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+def clear_character_bank_from_device():
+    if storage is None:
+        return False, "Device storage component is unavailable."
+    try:
+        storage.deleteItem(
+            DEVICE_BANK_BLOB,
+            key="clear_character_bank_blob",
+        )
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)
+
+
+if not st.session_state.get("persistent_character_bank_loaded", False):
+    device_bank = load_character_bank_from_device()
+    if device_bank:
+        st.session_state.character_bank = device_bank
+    st.session_state["persistent_character_bank_loaded"] = True
 
 # ---------------------------
 # HELPERS
@@ -267,6 +445,16 @@ def render_master_mp3(master_wav_bytes, bgm_upload=None, bgm_db=-27):
 
         return Path(output_path).read_bytes()
 
+
+def render_scene_with_bgm_mp3(scene_wav_bytes, bgm_upload, bgm_db=-20):
+    if not scene_wav_bytes:
+        return b""
+    return render_master_mp3(
+        scene_wav_bytes,
+        bgm_upload=bgm_upload,
+        bgm_db=bgm_db,
+    )
+
 def pil_to_png_bytes(image):
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -295,17 +483,34 @@ def build_scene_image_prompt(scene_text, image_style, ratio, matched_names):
     )
 
 def collect_uploaded_refs(uploaded_files):
+    """
+    Normalize reference images to compact JPEG files so a larger reusable
+    Character Bank can fit more reliably in browser/device storage.
+    """
     refs = []
     if not uploaded_files:
         return refs
+
     for f in uploaded_files:
         try:
             data = f.getvalue()
             if not data:
                 continue
-            refs.append({"name": f.name, "bytes": data, "mime": f.type or "image/png"})
+
+            image = Image.open(io.BytesIO(data)).convert("RGB")
+            image.thumbnail((640, 640))
+
+            out = io.BytesIO()
+            image.save(out, format="JPEG", quality=86, optimize=True)
+
+            refs.append({
+                "name": Path(f.name).stem + ".jpg",
+                "bytes": out.getvalue(),
+                "mime": "image/jpeg",
+            })
         except Exception:
             continue
+
     return refs
 
 def reference_note(reference_files):
@@ -392,18 +597,20 @@ def import_character_bank_zip(upload):
             })
         st.session_state.character_bank = imported
 
-def matched_character_entries(scene_text):
+def matched_character_entries(scene_text, project_group=None):
     text = scene_text.lower()
     matches = []
     for char in st.session_state.character_bank:
+        if project_group and char.get("project_group") not in (project_group, "Custom"):
+            continue
         candidates = [char["name"]] + list(char.get("aliases", []))
         candidates = [c.strip().lower() for c in candidates if c.strip()]
         if any(c and c in text for c in candidates):
             matches.append(char)
     return matches
 
-def character_refs_for_scene(scene_text, previous_scene_ref=None, limit=8):
-    matched = matched_character_entries(scene_text)
+def character_refs_for_scene(scene_text, project_group=None, previous_scene_ref=None, limit=8):
+    matched = matched_character_entries(scene_text, project_group=project_group)
     refs = []
     names = []
     for char in matched:
@@ -461,12 +668,40 @@ def synthesize_with_rotation(api_keys, voice, text, style):
     raise RuntimeError(json.dumps(attempts, ensure_ascii=False))
 
 def image_response_to_pil(response):
-    def try_open(image_bytes):
-        return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    """
+    Decode Gemini Interactions image responses.
+    Gemini output_image.data and model-output image blocks are base64 strings.
+    """
+    def decode_image_data(data):
+        if data is None:
+            raise RuntimeError("Gemini returned an empty image payload.")
+
+        if isinstance(data, str):
+            raw = base64.b64decode(data)
+        elif isinstance(data, (bytes, bytearray)):
+            # Some SDK versions may expose raw bytes; if they are actually
+            # base64 bytes, try decoding first and fall back to raw bytes.
+            try:
+                raw = base64.b64decode(data, validate=True)
+            except Exception:
+                raw = bytes(data)
+        else:
+            raise RuntimeError(
+                f"Unexpected Gemini image payload type: {type(data).__name__}"
+            )
+
+        return Image.open(io.BytesIO(raw)).convert("RGB")
 
     output_image = getattr(response, "output_image", None)
     if output_image and getattr(output_image, "data", None):
-        return try_open(output_image.data)
+        return decode_image_data(output_image.data)
+
+    for step in getattr(response, "steps", []) or []:
+        if getattr(step, "type", None) != "model_output":
+            continue
+        for block in getattr(step, "content", []) or []:
+            if getattr(block, "type", None) == "image" and getattr(block, "data", None):
+                return decode_image_data(block.data)
 
     for cand in getattr(response, "candidates", []) or []:
         content = getattr(cand, "content", None)
@@ -475,26 +710,45 @@ def image_response_to_pil(response):
         for part in getattr(content, "parts", []) or []:
             inline_data = getattr(part, "inline_data", None)
             if inline_data and getattr(inline_data, "data", None):
-                return try_open(inline_data.data)
+                return decode_image_data(inline_data.data)
 
     raise RuntimeError("Gemini returned no image content.")
 
-def generate_image_one(api_key, model, prompt, reference_files):
+
+def generate_image_one(api_key, model, prompt, reference_files, ratio):
     if genai is None:
         raise RuntimeError("google-genai is not available. Check requirements.txt.")
+
     client = genai.Client(api_key=api_key)
     input_parts = [{"type": "text", "text": prompt}]
+
     for ref in reference_files[:8]:
-        input_parts.append({"type": "image", "mime_type": ref["mime"], "data": ref["bytes"]})
-    response = client.interactions.create(model=model, input=input_parts)
+        input_parts.append({
+            "type": "image",
+            "mime_type": ref["mime"],
+            "data": base64.b64encode(ref["bytes"]).decode("utf-8"),
+        })
+
+    response = client.interactions.create(
+        model=model,
+        input=input_parts,
+        response_format={
+            "type": "image",
+            "mime_type": "image/png",
+            "aspect_ratio": ratio,
+            "image_size": "1K",
+        },
+    )
+
     return image_response_to_pil(response)
 
-def generate_image_with_rotation(api_keys, prompt, reference_files):
+
+def generate_image_with_rotation(api_keys, prompt, reference_files, ratio):
     attempts = []
     for model in (PRIMARY_IMAGE_MODEL, FALLBACK_IMAGE_MODEL):
         for account_no, api_key in enumerate(api_keys, 1):
             try:
-                image = generate_image_one(api_key, model, prompt, reference_files)
+                image = generate_image_one(api_key, model, prompt, reference_files, ratio)
                 return image, model, account_no, attempts
             except Exception as exc:
                 attempts.append({"model": model, "account": account_no, "error": str(exc)[:700]})
@@ -565,43 +819,67 @@ with st.expander("🔑 Gemini API Keys", expanded=True):
     c1, c2 = st.columns(2)
     with c1:
         if st.button("💾 Save Gemini keys on this device", use_container_width=True):
-            if storage is None:
-                st.warning(
-                    "Device storage is unavailable in this session. "
-                    "You can still use the app with manually entered keys."
-                )
-            elif remember:
-                values = {"g1": g1, "g2": g2, "g3": g3}
-                saved_ok = True
-                for short, value in values.items():
-                    saved_ok = save_device_value(DEVICE_KEYS[short], value.strip()) and saved_ok
-                    st.session_state[f"loaded_{short}"] = value.strip()
-                if saved_ok:
-                    st.success("Gemini keys saved in this browser on this device.")
-                else:
-                    st.warning("The browser did not confirm local key storage.")
-            else:
+            if not remember:
                 st.warning("Enable 'Remember Gemini API keys on this device' first.")
+            else:
+                ok, err = save_gemini_keys_blob(g1, g2, g3)
+                if ok:
+                    st.success(
+                        "Gemini keys were sent to this browser's local storage. "
+                        "Refresh the page once to verify they reload automatically."
+                    )
+                else:
+                    st.warning(
+                        "Device storage could not be written. "
+                        "The keys remain usable in this current session."
+                    )
+                    if err:
+                        with st.expander("Storage error detail"):
+                            st.code(err)
     with c2:
         if st.button("🗑️ Clear saved Gemini keys from this device", use_container_width=True):
-            for short, storage_key in DEVICE_KEYS.items():
-                delete_device_value(storage_key)
-                st.session_state[f"loaded_{short}"] = ""
-            st.success("Saved Gemini API keys cleared from this device.")
+            ok, err = clear_gemini_keys_blob()
+            if ok:
+                st.success("Saved Gemini API keys cleared from this device.")
+            else:
+                st.warning("Could not clear browser local storage.")
+                if err:
+                    with st.expander("Storage error detail"):
+                        st.code(err)
 
 gemini_keys = clean_keys([g1, g2, g3])
 st.write(f"Gemini keys detected: **{len(gemini_keys)}**")
 
-st.subheader("1. Character Bank")
+st.subheader("1. Story Universe & Common Character Bank")
+
+active_story_group = st.selectbox(
+    "Story Universe",
+    ["Ramayan", "Mahabharat", "Custom"],
+    index=0,
+    help=(
+        "The reusable Character Bank is common across stories. "
+        "Selecting a universe automatically loads and uses characters from that group."
+    ),
+)
+
+group_characters = [
+    c for c in st.session_state.character_bank
+    if c.get("project_group") in (active_story_group, "Custom")
+]
+st.caption(
+    f"Loaded for {active_story_group}: {len(group_characters)} character(s). "
+    f"Total saved in common bank: {len(st.session_state.character_bank)}."
+)
 
 bank_col1, bank_col2 = st.columns([1.1, 0.9])
 
 with bank_col1:
     with st.form("add_character_form", clear_on_submit=True):
+        project_group_options = ["Ramayan", "Mahabharat", "Custom"]
         project_group = st.selectbox(
             "Project / Group",
-            ["Ramayan", "Mahabharat", "Custom"],
-            index=0,
+            project_group_options,
+            index=project_group_options.index(active_story_group),
         )
         char_name = st.text_input("Character name")
         char_aliases = st.text_input("Aliases (comma separated)")
@@ -616,7 +894,17 @@ with bank_col1:
         if submitted:
             try:
                 add_character_to_bank(project_group, char_name, char_aliases, char_notes, char_images)
-                st.success(f"Added {char_name.strip()} to the Character Bank.")
+                ok, err = save_character_bank_to_device()
+                if ok:
+                    st.success(
+                        f"Added {char_name.strip()} to the common Character Bank and saved it on this device."
+                    )
+                else:
+                    st.warning(
+                        f"Added {char_name.strip()} for this session, but device storage could not be updated."
+                    )
+                    if err:
+                        st.caption(err)
             except Exception as exc:
                 st.error(str(exc))
 
@@ -630,7 +918,8 @@ with bank_col2:
         try:
             import_character_bank_zip(imported_bank)
             st.session_state.bank_loaded_once = True
-            st.success("Character Bank imported successfully.")
+            save_character_bank_to_device()
+            st.success("Character Bank imported and saved as the common bank on this device.")
         except Exception as exc:
             st.error(f"Could not import Character Bank: {exc}")
 
@@ -638,7 +927,8 @@ with bank_col2:
         if imported_bank is not None:
             try:
                 import_character_bank_zip(imported_bank)
-                st.success("Character Bank reloaded.")
+                save_character_bank_to_device()
+                st.success("Character Bank reloaded and saved on this device.")
             except Exception as exc:
                 st.error(f"Could not reload Character Bank: {exc}")
         else:
@@ -654,14 +944,30 @@ with bank_col2:
             use_container_width=True,
         )
 
+    if st.button("💾 Save common Character Bank on this device", use_container_width=True):
+        ok, err = save_character_bank_to_device()
+        if ok:
+            st.success("Common Character Bank saved on this device.")
+        else:
+            st.warning("Could not save the Character Bank to browser/device storage.")
+            if err:
+                st.caption(err)
+
     if st.button("Clear entire Character Bank", use_container_width=True):
         st.session_state.character_bank = []
-        st.success("Character Bank cleared.")
+        clear_character_bank_from_device()
+        st.success("Character Bank cleared from this session and this device.")
 
 st.write(f"Characters in bank: **{len(st.session_state.character_bank)}**")
 
-if st.session_state.character_bank:
-    for idx, char in enumerate(st.session_state.character_bank):
+visible_bank = [
+    (idx, char)
+    for idx, char in enumerate(st.session_state.character_bank)
+    if char.get("project_group") in (active_story_group, "Custom")
+]
+
+if visible_bank:
+    for idx, char in visible_bank:
         with st.expander(f"{idx+1}. {char['name']} — {char['project_group']}", expanded=False):
             st.write(f"**Aliases:** {', '.join(char['aliases']) if char['aliases'] else '—'}")
             st.write(f"**Notes:** {char['notes'] if char['notes'] else '—'}")
@@ -673,6 +979,7 @@ if st.session_state.character_bank:
                     st.caption(ref["name"])
             if st.button(f"Delete {char['name']}", key=f"delete_char_{char['id']}"):
                 st.session_state.character_bank.pop(idx)
+                save_character_bank_to_device()
                 st.rerun()
 
 st.subheader("2. Story")
@@ -689,8 +996,33 @@ with col3:
 
 voice_style = st.text_area("Narrator direction", value=DEFAULT_VOICE_STYLE, height=150)
 image_style = st.text_area("Image direction", value=DEFAULT_IMAGE_STYLE, height=150)
+
+image_api_mode = st.radio(
+    "Image generation mode",
+    [
+        "Free-only: prepare image prompts and references, do not call paid Gemini image API",
+        "Gemini Image API: generate images automatically (paid tier required)",
+    ],
+    index=0,
+    help=(
+        "Google currently lists Gemini 3.1 image models as unavailable on the API Free Tier. "
+        "Free-only mode prevents accidental paid image-generation calls."
+    ),
+)
+use_gemini_image_api = image_api_mode.startswith("Gemini Image API")
 bgm = st.file_uploader("Optional background music", type=["mp3", "wav"])
-bgm_db = st.slider("Background music level under narration (dB)", -36, -14, -27)
+bgm_db = st.slider(
+    "Background music level under narration (dB)",
+    -36,
+    -8,
+    -20,
+    help="Start around -20 dB. Move toward -14 dB if the music is too soft.",
+)
+if bgm is not None:
+    st.success(
+        f"Background music loaded: {bgm.name}. "
+        f"It will be mixed into the full narration and every completed scene preview at {bgm_db} dB."
+    )
 resume_zip = st.file_uploader("Optional: resume an unfinished project ZIP", type=["zip"])
 
 scenes = make_dynamic_scenes(story, target_chars=target_chars, max_chars=max(450, target_chars + 180)) if story.strip() else []
@@ -698,7 +1030,7 @@ if scenes:
     st.success(f"Dynamic scene plan: {len(scenes)} scenes")
     with st.expander("Preview scene text"):
         for n, scene in enumerate(scenes, 1):
-            match_names = [c["name"] for c in matched_character_entries(scene)]
+            match_names = [c["name"] for c in matched_character_entries(scene, project_group=active_story_group)]
             st.markdown(f"**Scene {n:03d}**")
             st.write(scene)
             st.caption("Matched bank characters: " + (", ".join(match_names) if match_names else "none"))
@@ -738,6 +1070,7 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
         "primary_image_model": PRIMARY_IMAGE_MODEL,
         "fallback_image_model": FALLBACK_IMAGE_MODEL,
         "character_bank_count": len(st.session_state.character_bank),
+        "story_universe": active_story_group,
     })
 
     progress = st.progress(0)
@@ -764,26 +1097,63 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
                 break
 
         if image_bytes is None:
-            scene_refs, matched_names = character_refs_for_scene(scene_text, previous_scene_ref=previous_scene_ref, limit=8)
-            prompt = build_scene_image_prompt(scene_text, image_style.strip(), ratio, matched_names)
+            scene_refs, matched_names = character_refs_for_scene(
+                scene_text,
+                project_group=active_story_group,
+                previous_scene_ref=previous_scene_ref,
+                limit=8,
+            )
+            prompt = build_scene_image_prompt(
+                scene_text,
+                image_style.strip(),
+                ratio,
+                matched_names,
+            )
             prompt = prompt + "\n\n" + reference_note(scene_refs)
 
-            try:
-                image, image_model, image_account, image_attempts = generate_image_with_rotation(gemini_keys, prompt, scene_refs)
-                image_bytes = pil_to_png_bytes(image)
+            meta.update({
+                "image_prompt": prompt,
+                "matched_bank_characters": matched_names,
+            })
+
+            if use_gemini_image_api:
+                try:
+                    image, image_model, image_account, image_attempts = generate_image_with_rotation(
+                        gemini_keys,
+                        prompt,
+                        scene_refs,
+                        ratio,
+                    )
+                    image_bytes = pil_to_png_bytes(image)
+                    meta.update({
+                        "image_model": image_model,
+                        "image_account": image_account,
+                        "image_attempts_before_success": image_attempts,
+                    })
+                except Exception as exc:
+                    # Do not throw away the successfully generated narration.
+                    # Keep this scene completed with an image-pending state,
+                    # and continue with the remaining scenes.
+                    meta.update({
+                        "image_model": "PENDING",
+                        "image_error": str(exc)[:3000],
+                    })
+                    log.append({
+                        "scene": scene_no,
+                        "stage": "image",
+                        "status": "PENDING",
+                        "error": str(exc)[:2000],
+                    })
+            else:
                 meta.update({
-                    "image_model": image_model,
-                    "image_account": image_account,
-                    "image_attempts_before_success": image_attempts,
-                    "image_prompt": prompt,
-                    "matched_bank_characters": matched_names,
+                    "image_model": "FREE_ONLY_PROMPT_READY",
+                    "image_account": 0,
                 })
-            except Exception as exc:
-                completed.append({"scene_no": scene_no, "text": scene_text, "audio": audio, "image": None, "meta": meta})
-                state.update({"status": "PAUSED", "failed_scene": scene_no, "last_error": f"IMAGE: {str(exc)[:3000]}"})
-                log.append({"scene": scene_no, "stage": "image", "status": "FAILED", "error": str(exc)[:2000]})
-                paused = True
-                break
+                log.append({
+                    "scene": scene_no,
+                    "stage": "image",
+                    "status": "PROMPT_READY",
+                })
 
         if image_bytes is not None:
             previous_scene_ref = {"name": f"scene_{scene_no:03d}.png", "bytes": image_bytes, "mime": "image/png"}
@@ -801,7 +1171,13 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
         progress.progress(scene_no / len(scenes))
 
     if not paused and len(completed) == len(scenes):
-        state.update({"status": "COMPLETE", "failed_scene": None, "last_error": None})
+        pending_images = sum(1 for item in completed if not item.get("image"))
+        state.update({
+            "status": "COMPLETE" if pending_images == 0 else "COMPLETE_WITH_PENDING_IMAGES",
+            "failed_scene": None,
+            "last_error": None,
+            "pending_images": pending_images,
+        })
 
     master_wav_bytes = b""
     master_mp3_bytes = b""
@@ -824,12 +1200,39 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
         except Exception as exc:
             st.warning(f"Master audio could not be prepared: {exc}")
 
+    # Prepare scene-by-scene preview audio with BGM so the mix can be verified immediately.
+    scene_mixed_audio = {}
+    if bgm is not None:
+        for item in completed:
+            if item.get("audio"):
+                try:
+                    scene_mixed_audio[item["scene_no"]] = render_scene_with_bgm_mp3(
+                        item["audio"],
+                        bgm_upload=bgm,
+                        bgm_db=bgm_db,
+                    )
+                except Exception as exc:
+                    item.setdefault("meta", {})["bgm_mix_error"] = str(exc)[:1500]
+
     package = io.BytesIO()
     with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("project_state.json", json.dumps(state, ensure_ascii=False, indent=2).encode("utf-8"))
         archive.writestr("run_log.json", json.dumps(log, ensure_ascii=False, indent=2).encode("utf-8"))
         archive.writestr("story/full_story.txt", story.encode("utf-8"))
         archive.writestr("story/scenes.json", json.dumps([{"scene": n, "text": text} for n, text in enumerate(scenes, 1)], ensure_ascii=False, indent=2).encode("utf-8"))
+
+        image_manifest = []
+        for item in completed:
+            image_manifest.append({
+                "scene": item["scene_no"],
+                "prompt": item.get("meta", {}).get("image_prompt", ""),
+                "matched_bank_characters": item.get("meta", {}).get("matched_bank_characters", []),
+                "image_status": item.get("meta", {}).get("image_model", "PENDING"),
+            })
+        archive.writestr(
+            "images/image_generation_manifest.json",
+            json.dumps(image_manifest, ensure_ascii=False, indent=2).encode("utf-8"),
+        )
 
         if master_mp3_bytes:
             archive.writestr("audio/full_story_master.mp3", master_mp3_bytes)
@@ -844,6 +1247,11 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
             archive.writestr(f"story/scene_{n:03d}.txt", item["text"].encode("utf-8"))
             if item["audio"]:
                 archive.writestr(f"audio/scene_{n:03d}.wav", item["audio"])
+            if scene_mixed_audio.get(n):
+                archive.writestr(
+                    f"audio/scene_{n:03d}_with_bgm.mp3",
+                    scene_mixed_audio[n],
+                )
             if item["image"]:
                 archive.writestr(f"images/scene_{n:03d}.png", item["image"])
             archive.writestr(f"metadata/scene_{n:03d}.json", json.dumps(item["meta"], ensure_ascii=False, indent=2).encode("utf-8"))
@@ -852,6 +1260,11 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
 
     if state["status"] == "COMPLETE":
         st.success("Complete: story text, matching narration audio and matching scene images are ready.")
+    elif state["status"] == "COMPLETE_WITH_PENDING_IMAGES":
+        st.warning(
+            f"Text and narration are complete. {state.get('pending_images', 0)} scene image(s) are pending. "
+            "Their prompts and character-reference mapping are saved in the project ZIP."
+        )
     else:
         st.warning(
             f"Generation paused at Scene {state.get('failed_scene')}. Download the ZIP now. "
@@ -859,7 +1272,11 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
         )
 
     if master_mp3_bytes:
-        st.subheader("Full narration")
+        st.subheader(
+            "Full narration with background music"
+            if bgm is not None
+            else "Full narration"
+        )
         st.audio(master_mp3_bytes, format="audio/mp3")
     elif master_wav_bytes:
         st.subheader("Full narration")
@@ -883,7 +1300,10 @@ if st.button("🚀 Generate / Resume Story Media", type="primary", use_container
                 st.markdown("**Story text**")
                 st.write(item["text"])
                 if item["audio"]:
-                    st.markdown("**Narration audio**")
+                    if scene_mixed_audio.get(n):
+                        st.markdown("**Narration with background music**")
+                        st.audio(scene_mixed_audio[n], format="audio/mp3")
+                    st.markdown("**Dry narration (voice only)**")
                     st.audio(item["audio"], format="audio/wav")
                 if item["meta"].get("matched_bank_characters"):
                     st.caption("Matched bank characters: " + ", ".join(item["meta"]["matched_bank_characters"]))
