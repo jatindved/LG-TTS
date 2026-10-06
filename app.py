@@ -1,4 +1,4 @@
-# BUILD: Story Media Creator Python314 Verified 2026-10-06
+# BUILD: Story Media Creator FULL Character Bank Python 3.14 — 2026-10-06
 
 import io
 import json
