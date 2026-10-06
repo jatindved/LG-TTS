@@ -1,3 +1,4 @@
+# BUILD: Story Media Creator Python314 Verified 2026-10-06
 
 import io
 import json
@@ -92,5 +93,3 @@ def clean_keys(values):
 
 def story_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-def slugify(value):
